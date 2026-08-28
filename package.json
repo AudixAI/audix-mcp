@@ -1,0 +1,50 @@
+{
+  "name": "@audix/mcp",
+  "version": "0.1.1",
+  "description": "Audix MCP server — a secure auth, API, and realtime bridge that lets coding agents upload a Foundry project, receive scan progress, and fetch the generated fuzz harness.",
+  "type": "module",
+  "license": "MIT",
+  "contentPolicy": {
+    "class": "dual-use"
+  },
+  "homepage": "https://audix.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AudixAI/audix-mcp.git"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "files": [
+    "dist",
+    "DISCLOSURE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "bin": {
+    "audix-mcp": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
+    "dev": "tsx src/index.ts",
+    "prepack": "pnpm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "aws-amplify": "6.18.0",
+    "yauzl": "3.4.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "@types/yauzl": "3.4.0",
+    "tsx": "4.23.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.9"
+  }
+}

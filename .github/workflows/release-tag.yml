@@ -1,0 +1,93 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version bump
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      target_ref:
+        description: Commit, branch, or tag already merged to main
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tag-${{ inputs.bump }}
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Create next release tag
+        env:
+          BUMP_INPUT: ${{ inputs.bump }}
+          TARGET_REF_INPUT: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin main
+          git fetch --tags origin
+          target_sha="$(git rev-parse "${TARGET_REF_INPUT}^{commit}")"
+
+          if ! git merge-base --is-ancestor "$target_sha" origin/main; then
+            echo "::error::Target ref must already be merged into origin/main."
+            exit 1
+          fi
+
+          package_version="$(git show "${target_sha}:package.json" | jq -r '.version')"
+          if [[ ! "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::package.json version must be a plain semantic version."
+            exit 1
+          fi
+
+          latest_tag="$(
+            git tag --list 'audix-mcp-v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+              | grep -E '^audix-mcp-v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | head -n 1 || true
+          )"
+          latest_version="${latest_tag#audix-mcp-v}"
+          if [[ -z "$latest_tag" ]]; then
+            latest_version="0.0.0"
+          fi
+
+          IFS=. read -r major minor patch <<< "$latest_version"
+          case "$BUMP_INPUT" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            *) echo "::error::Unsupported bump ${BUMP_INPUT}."; exit 1 ;;
+          esac
+
+          next_version="${major}.${minor}.${patch}"
+          if [[ "$package_version" != "$next_version" ]]; then
+            echo "::error::package.json is ${package_version}; expected next ${BUMP_INPUT} version ${next_version}."
+            exit 1
+          fi
+
+          tag="audix-mcp-v${package_version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::Tag ${tag} already exists."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" "$target_sha" -m "Release ${tag}"
+          git push origin "refs/tags/${tag}"

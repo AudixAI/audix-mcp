@@ -1,0 +1,254 @@
+name: Publish MCP Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Merged audix-mcp-vX.Y.Z release tag to publish
+        required: true
+        type: string
+      bootstrap_first_publish:
+        description: Prepare the first artifact for interactive publication with 2FA
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-mcp-audix-mcp
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Verify and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      artifact_name: ${{ steps.release.outputs.artifact_name }}
+      tarball_name: ${{ steps.pack.outputs.tarball_name }}
+      tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}
+      verifier_name: ${{ steps.pack.outputs.verifier_name }}
+      verifier_sha256: ${{ steps.pack.outputs.verifier_sha256 }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Validate merged release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^audix-mcp-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Release tag must match audix-mcp-vX.Y.Z."
+            exit 1
+          fi
+
+          git fetch --no-tags origin main
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          release_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+
+          if ! git merge-base --is-ancestor "$release_sha" origin/main; then
+            echo "::error::Release tag must point to a commit reachable from origin/main."
+            exit 1
+          fi
+
+          git checkout --detach "$release_sha"
+          version="${RELEASE_TAG#audix-mcp-v}"
+          package_name="$(jq -r '.name' package.json)"
+          package_version="$(jq -r '.version' package.json)"
+          repository_url="$(jq -r '.repository.url' package.json)"
+
+          if [[ "$package_name" != "@audix/mcp" ]]; then
+            echo "::error::Expected package name @audix/mcp, found ${package_name}."
+            exit 1
+          fi
+          if [[ "$package_version" != "$version" ]]; then
+            echo "::error::Tag version ${version} does not match package version ${package_version}."
+            exit 1
+          fi
+          if [[ "$repository_url" != "git+https://github.com/AudixAI/audix-mcp.git" ]]; then
+            echo "::error::Package repository must identify AudixAI/audix-mcp exactly."
+            exit 1
+          fi
+
+          echo "artifact_name=audix-mcp-${version}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+      - name: Pack exact release artifact
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/audix-mcp-package"
+          mkdir -p "$package_dir"
+          node scripts/verify-public-package.mjs \
+            --pack-destination "$package_dir" \
+            --github-output "$GITHUB_OUTPUT"
+          verifier_name="verify-installed-package.mjs"
+          verifier_sha256="$(sha256sum "scripts/$verifier_name" | awk '{print $1}')"
+          echo "verifier_name=${verifier_name}" >> "$GITHUB_OUTPUT"
+          echo "verifier_sha256=${verifier_sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.release.outputs.artifact_name }}
+          path: ${{ runner.temp }}/audix-mcp-package/${{ steps.pack.outputs.tarball_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload isolated consumer verifier
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.release.outputs.artifact_name }}-consumer-verifier
+          path: scripts/${{ steps.pack.outputs.verifier_name }}
+          if-no-files-found: error
+          retention-days: 1
+
+  consumer-smoke:
+    name: Verify isolated consumer install
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}
+          path: ${{ runner.temp }}/audix-mcp-consumer
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}-consumer-verifier
+          path: ${{ runner.temp }}/audix-mcp-consumer
+
+      - name: Install and exercise package artifact
+        env:
+          EXPECTED_SHA256: ${{ needs.package.outputs.tarball_sha256 }}
+          EXPECTED_VERIFIER_SHA256: ${{ needs.package.outputs.verifier_sha256 }}
+          TARBALL_NAME: ${{ needs.package.outputs.tarball_name }}
+          VERIFIER_NAME: ${{ needs.package.outputs.verifier_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          verifier="$RUNNER_TEMP/audix-mcp-consumer/$VERIFIER_NAME"
+          actual_verifier_sha256="$(sha256sum "$verifier" | awk '{print $1}')"
+          if [[ "$actual_verifier_sha256" != "$EXPECTED_VERIFIER_SHA256" ]]; then
+            echo "::error::Consumer verifier digest does not match the build job."
+            exit 1
+          fi
+          node "$verifier" \
+            --tarball "$RUNNER_TEMP/audix-mcp-consumer/$TARBALL_NAME" \
+            --expected-sha256 "$EXPECTED_SHA256"
+
+  stage-oidc:
+    name: Stage on npm with OIDC
+    if: ${{ !inputs.bootstrap_first_publish }}
+    needs: [package, consumer-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install staged-publishing-capable npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.1 --ignore-scripts
+          npm_version="$(npm --version)"
+          node -e 'const [a,b]=process.argv[1].split(".").map(Number); process.exit(a > 11 || (a === 11 && b >= 15) ? 0 : 1)' "$npm_version"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}
+          path: ${{ runner.temp }}/audix-mcp-publish
+
+      - name: Verify and stage exact artifact with OIDC
+        env:
+          EXPECTED_SHA256: ${{ needs.package.outputs.tarball_sha256 }}
+          TARBALL_NAME: ${{ needs.package.outputs.tarball_name }}
+          VERSION: ${{ needs.package.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/audix-mcp-publish/$TARBALL_NAME"
+          actual_sha256="$(sha256sum "$tarball" | awk '{print $1}')"
+          [[ "$actual_sha256" == "$EXPECTED_SHA256" ]]
+          npmrc="$RUNNER_TEMP/npm-oidc.npmrc"
+          : > "$npmrc"
+          chmod 0600 "$npmrc"
+          export NPM_CONFIG_USERCONFIG="$npmrc"
+          unset NODE_AUTH_TOKEN NPM_TOKEN
+          npm stage publish "$tarball" --access public --ignore-scripts --provenance
+          {
+            echo "### npm stage created"
+            echo
+            echo "Approve @audix/mcp@${VERSION} with 2FA from npmjs.com or with npm stage approve."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  bootstrap-artifact:
+    name: Authorize first-release artifact
+    if: ${{ inputs.bootstrap_first_publish }}
+    needs: [package, consumer-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}
+          path: ${{ runner.temp }}/audix-mcp-publish
+
+      - name: Verify and authorize exact first artifact
+        env:
+          EXPECTED_SHA256: ${{ needs.package.outputs.tarball_sha256 }}
+          TARBALL_NAME: ${{ needs.package.outputs.tarball_name }}
+          VERSION: ${{ needs.package.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/audix-mcp-publish/$TARBALL_NAME"
+          actual_sha256="$(sha256sum "$tarball" | awk '{print $1}')"
+          [[ "$actual_sha256" == "$EXPECTED_SHA256" ]]
+          {
+            echo "### First-release artifact authorized"
+            echo
+            echo "Download artifact ${{ needs.package.outputs.artifact_name }} from this run."
+            echo "Verify its SHA-256 is $EXPECTED_SHA256."
+            echo "Publish it interactively with 2FA: npm publish $TARBALL_NAME --access public --ignore-scripts"
+            echo "Do not use a bypass-2FA token for this dual-use package."
+          } >> "$GITHUB_STEP_SUMMARY"

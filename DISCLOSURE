@@ -1,0 +1,23 @@
+AUDIX MCP DUAL-USE SECURITY DISCLOSURE
+
+This package connects compatible coding agents to Audix's smart-contract
+security testing service. It can upload a user-selected Foundry project,
+track security analysis, and retrieve generated fuzz-test harnesses.
+
+Intended legitimate use
+
+Audix MCP is intended for defensive security testing, secure software
+development, vulnerability research, and authorized assessment of smart
+contracts. Users must test only software they own or are explicitly
+authorized to assess and must comply with applicable laws and agreements.
+
+Potential for misuse
+
+Security testing and fuzzing capabilities can be applied to software without
+authorization. Such use is outside the intended purpose of this package.
+
+Operational boundaries
+
+The client requires an authenticated Audix account, limits archive uploads to
+an authorized project root, excludes common credential paths, and retrieves
+only artifacts identified by the Audix service for the selected scan.
