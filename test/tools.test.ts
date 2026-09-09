@@ -77,6 +77,7 @@ function toolHarness(
       email: "scanner@example.com",
       username: "scanner@example.com",
     }),
+    completeTargetUpload: vi.fn().mockResolvedValue(target()),
     ...api,
   };
   const monitor = {
@@ -140,8 +141,9 @@ describe("current upload/start workflow", () => {
     const createTargetUpload = vi.fn().mockResolvedValue(uploadEnvelope());
     const performPresignedUpload = vi.fn().mockResolvedValue(undefined);
     const startScan = vi.fn().mockResolvedValue(scan());
+    const completeTargetUpload = vi.fn().mockResolvedValue(target());
     const handlers = toolHarness(
-      { createTargetUpload, performPresignedUpload, startScan },
+      { createTargetUpload, performPresignedUpload, completeTargetUpload, startScan },
       undefined,
       {},
       {},
@@ -164,10 +166,51 @@ describe("current upload/start workflow", () => {
     expect(performPresignedUpload).toHaveBeenCalledOnce();
     const uploadedBytes = performPresignedUpload.mock.calls[0]?.[1];
     expect(Buffer.from(uploadedBytes as Uint8Array)).toEqual(archive.bytes);
+    expect(completeTargetUpload).toHaveBeenCalledWith(TARGET_ID);
+    expect(createTargetUpload).toHaveBeenCalledBefore(performPresignedUpload);
+    expect(performPresignedUpload).toHaveBeenCalledBefore(completeTargetUpload);
+    expect(completeTargetUpload).toHaveBeenCalledBefore(startScan);
     expect(startScan).toHaveBeenCalledWith(TARGET_ID);
     expect(payload(result).scan).toMatchObject({ scanId: SCAN_ID, status: "pending" });
     expect(payload(result).entries).toBeUndefined();
     expect(payload(result).archiveMetadataTrust).toBe("untrusted");
+  });
+
+  it.each([true, false])(
+    "fails when completion is rejected (autoStart=%s)",
+    async (autoStart) => {
+      const archive = await fixtureZip();
+      const startScan = vi.fn();
+      const handlers = toolHarness({
+        createTargetUpload: vi.fn().mockResolvedValue(uploadEnvelope()),
+        performPresignedUpload: vi.fn().mockResolvedValue(undefined),
+        completeTargetUpload: vi.fn().mockRejectedValue(
+          new AudixApiError(409, "Upload verification failed."),
+        ),
+        startScan,
+      }, undefined, {}, {}, dirname(archive.path));
+      const result = await handlers.get("upload_project")?.({ zipPath: archive.path, autoStart });
+      expect(result?.isError).toBe(true);
+      expect(result?.content[0]?.text).toContain("Upload verification failed.");
+      expect(startScan).not.toHaveBeenCalled();
+    },
+  );
+
+  it("completes deferred uploads without starting a scan", async () => {
+    const archive = await fixtureZip();
+    const completeTargetUpload = vi.fn().mockResolvedValue(target());
+    const startScan = vi.fn();
+    const handlers = toolHarness({
+      createTargetUpload: vi.fn().mockResolvedValue(uploadEnvelope()),
+      performPresignedUpload: vi.fn().mockResolvedValue(undefined),
+      completeTargetUpload,
+      startScan,
+    }, undefined, {}, {}, dirname(archive.path));
+    const result = await handlers.get("upload_project")?.({ zipPath: archive.path, autoStart: false });
+    if (result === undefined) throw new Error("upload_project was not registered.");
+    expect(result.isError).not.toBe(true);
+    expect(completeTargetUpload).toHaveBeenCalledWith(TARGET_ID);
+    expect(startScan).not.toHaveBeenCalled();
   });
 
   it("uploads the inspected snapshot even if the original path is overwritten", async () => {
@@ -226,12 +269,14 @@ describe("current upload/start workflow", () => {
   it("returns the existing target when the upload outcome is unknown", async () => {
     const archive = await fixtureZip();
     const startScan = vi.fn();
+    const completeTargetUpload = vi.fn();
     const handlers = toolHarness(
       {
         createTargetUpload: vi.fn().mockResolvedValue(uploadEnvelope()),
         performPresignedUpload: vi
           .fn()
           .mockRejectedValue(new AudixUploadAttemptError(new Error("upload timed out"))),
+        completeTargetUpload,
         startScan,
       },
       undefined,
@@ -255,6 +300,7 @@ describe("current upload/start workflow", () => {
       scan: null,
     });
     expect(payload(result).nextSteps).toContain("Do not create");
+    expect(completeTargetUpload).not.toHaveBeenCalled();
     expect(startScan).not.toHaveBeenCalled();
   });
 

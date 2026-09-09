@@ -298,6 +298,45 @@ describe("createTargetUpload", () => {
   });
 });
 
+describe("completeTargetUpload", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("posts completion and parses the returned target", async () => {
+    const target = {
+      id: TARGET_A,
+      userId: TARGET_B,
+      name: "counter",
+      uploadedProjectS3Key: "targets/u/t/project.zip",
+      createdAt: "2026-08-23T12:00:00Z",
+      updatedAt: "2026-08-23T12:00:00Z",
+      uploadStatus: "ready",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(target), { status: 200 }),
+    );
+    const api = new AudixApiClient("https://api.example", "https://bucket.s3.amazonaws.com", {
+      getAccessToken: async () => "token",
+      refreshRejectedAccessToken: async () => "token",
+    });
+    await expect(api.completeTargetUpload(TARGET_A)).resolves.toMatchObject({ id: TARGET_A });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://api.example/api/v1/targets/${TARGET_A}/upload-complete`,
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("propagates a rejected completion", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Upload verification failed." }), { status: 409 }),
+    );
+    const api = new AudixApiClient("https://api.example", "https://bucket.s3.amazonaws.com", {
+      getAccessToken: async () => "token",
+      refreshRejectedAccessToken: async () => "token",
+    });
+    await expect(api.completeTargetUpload(TARGET_A)).rejects.toThrow("Upload verification failed.");
+  });
+});
+
 describe("authenticated request recovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
