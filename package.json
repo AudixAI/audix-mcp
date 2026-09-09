@@ -1,6 +1,6 @@
 {
   "name": "@audix/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Audix MCP server — a secure auth, API, and realtime bridge that lets coding agents upload a Foundry project, receive scan progress, and fetch the generated fuzz harness.",
   "type": "module",
   "license": "MIT",

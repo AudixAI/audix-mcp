@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const api = new AudixApiClient(config.apiBaseUrl, config.uploadBucketOrigin, auth);
 
   const server = new McpServer(
-    { name: "audix", version: "0.1.1" },
+    { name: "audix", version: "0.1.2" },
     {
       capabilities: { logging: {} },
       instructions:
