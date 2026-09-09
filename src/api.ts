@@ -301,6 +301,14 @@ export class AudixApiClient {
     });
   }
 
+  async completeTargetUpload(targetId: string): Promise<TargetWire> {
+    return this.request(
+      targetWireSchema,
+      `/targets/${encodeURIComponent(targetId)}/upload-complete`,
+      { method: "POST" },
+    );
+  }
+
   async listScans(targetId?: string): Promise<ScanWire[]> {
     const query = new URLSearchParams({ limit: "100" });
     if (targetId !== undefined) query.set("targetId", targetId);

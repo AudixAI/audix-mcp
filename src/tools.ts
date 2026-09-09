@@ -398,6 +398,10 @@ export function registerTools(
           });
         }
 
+        // Completion is required even for deferred scans. Keep it outside the
+        // scan-start recovery block: a pending target is not a usable upload.
+        await api.completeTargetUpload(target.id);
+
         if (autoStart) {
           try {
             monitor.trackTarget(target.id);
