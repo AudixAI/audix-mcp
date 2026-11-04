@@ -38,7 +38,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "aws-amplify": "6.18.0",
     "yauzl": "3.4.0",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "24.12.4",
